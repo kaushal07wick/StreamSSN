@@ -1,26 +1,76 @@
 @import "tailwindcss";
 
+/* === Root Theme Variables === */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --color-bg: #e8e7e4;         /* Matte off-white background */
+  --color-panel: #101010;      /* Deep cockpit black */
+  --color-border: #2a2a2a;
+  --color-accent: #ff4400;     /* Industrial orange */
+  --color-text-main: #111;
+  --color-text-subtle: #555;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
+/* === Dark Mode (optional) === */
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --color-bg: #0a0a0a;
+    --color-panel: #1a1a1a;
+    --color-border: #333;
+    --color-text-main: #eee;
+    --color-text-subtle: #aaa;
   }
 }
 
+/* === Global Defaults === */
+html,
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: var(--color-bg);
+  color: var(--color-text-main);
+  font-family: "JetBrains Mono", monospace;
+  letter-spacing: -0.01em;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: inherit;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+button {
+  transition: all 0.2s ease-in-out;
+  cursor: pointer;
+}
+
+/* === Orange Pulse (used in bars + indicators) === */
+@keyframes pulseOrange {
+  0%, 100% { opacity: 0.4; transform: scaleY(0.8); }
+  50% { opacity: 1; transform: scaleY(1.4); }
+}
+
+.pulse-bar {
+  animation: pulseOrange 0.5s ease-in-out infinite;
+}
+
+/* === Graph Aesthetic === */
+svg {
+  shape-rendering: geometricPrecision;
+}
+
+/* === Optional grid texture background (for retro cockpit vibe) === */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background-image: 
+    linear-gradient(rgba(255,68,0,0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,68,0,0.05) 1px, transparent 1px);
+  background-size: 30px 30px;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.15;
 }
