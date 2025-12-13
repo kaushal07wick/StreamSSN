@@ -1,15 +1,22 @@
-import asyncio, json, time, numpy as np, uvicorn, concurrent.futures, webrtcvad
+import asyncio, json, time, webrtcvad, uvicorn, numpy as np
 from collections import deque
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from inference import engine
+from faster_whisper import WhisperModel
 
 # ===== Config =====
-SAMPLE_RATE = 16000
-FRAME_MS = 20
-CHUNK_MS = 200                  # process every 0.2s for near real-time
+SAMPLE_RATE       = 16000
+FRAME_MS          = 20
+SILENCE_TIMEOUT_S = 1.0
+RETRANSCRIBE_EVERY_MS = 700     # how often we re-run model
+MAX_BUFFER_SEC    = 8
+
 VAD = webrtcvad.Vad(2)
-executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+frame_bytes = int(SAMPLE_RATE * FRAME_MS / 1000) * 2  # 16-bit mono
+
+print("🔄 Loading Faster-Whisper model (tiny.en, int8)...")
+model = WhisperModel("tiny.en", device="cpu", compute_type="int8")
+print("✅ Faster-Whisper ready.")
 
 # ===== FastAPI =====
 app = FastAPI()
@@ -20,155 +27,86 @@ app.add_middleware(
 )
 
 @app.get("/health")
-def health():
-    return {"status": "ok"}
+def health(): return {"status": "ok"}
 
 def int16_to_float32(b: bytes) -> np.ndarray:
+    """Convert 16-bit PCM -> float32"""
     return np.frombuffer(b, np.int16).astype(np.float32) / 32768.0
-
-async def run_transcribe(pcm_f32: np.ndarray):
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(executor, lambda: engine.transcribe(pcm_f32))
 
 @app.websocket("/ws/stream")
 async def stream(ws: WebSocket):
     await ws.accept()
     print("🎧 stream connected")
 
-    frame_bytes = int(SAMPLE_RATE * FRAME_MS / 1000) * 2
-    chunk_bytes = int(SAMPLE_RATE * CHUNK_MS / 1000) * 2
-    ring = deque(maxlen=int(SAMPLE_RATE * 4) * 2)  # 4 s rolling window
-
-    inflight = False
-    buffer_time = time.time()
-
-    async def process_loop():
-        nonlocal inflight
-        while True:
-            await asyncio.sleep(CHUNK_MS / 1000.0)
-            if inflight or len(ring) < SAMPLE_RATE * 0.5 * 2:
-                continue
-            inflight = True
-            pcm = int16_to_float32(bytes(ring))
-            t0 = time.time()
-            text, asr_ms = await run_transcribe(pcm)
-            inflight = False
-            if text.strip():
-                await ws.send_text(json.dumps({
-                    "type": "partial",
-                    "text": text.strip(),
-                    "asr_ms": int((time.time() - t0) * 1000),
-                }))
-
-    asyncio.create_task(process_loop())
+    ring = deque(maxlen=int(SAMPLE_RATE * MAX_BUFFER_SEC) * 2)
+    last_voice_t = last_transcribe_t = time.time()
+    speaking = False
+    transcript_lines = []
+    last_text = ""
 
     try:
         while True:
-            data = await ws.receive_bytes()
-            ring.extend(data)
-
-            # quick VAD to drop complete silence
-            if len(data) >= frame_bytes:
-                frame = data[-frame_bytes:]
-                if not VAD.is_speech(frame, SAMPLE_RATE):
-                    continue
-    except WebSocketDisconnect:
-        print("🔌 disconnected")
-    except Exception as e:
-        print(f"⚠️ error: {e}")
-    finally:
-        try:
-            await ws.close()
-        except Exception:
-            pass
-        print("🧹 closed")
-
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8787)
-import asyncio, json, time, numpy as np, uvicorn, concurrent.futures, webrtcvad
-from collections import deque
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
-from inference import engine
-
-# ===== Config =====
-SAMPLE_RATE = 16000
-FRAME_MS = 20
-CHUNK_MS = 200                  # process every 0.2s for near real-time
-VAD = webrtcvad.Vad(2)
-executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-
-# ===== FastAPI =====
-app = FastAPI()
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"], allow_credentials=True,
-    allow_methods=["*"], allow_headers=["*"],
-)
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-
-def int16_to_float32(b: bytes) -> np.ndarray:
-    return np.frombuffer(b, np.int16).astype(np.float32) / 32768.0
-
-async def run_transcribe(pcm_f32: np.ndarray):
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(executor, lambda: engine.transcribe(pcm_f32))
-
-@app.websocket("/ws/stream")
-async def stream(ws: WebSocket):
-    await ws.accept()
-    print("🎧 stream connected")
-
-    frame_bytes = int(SAMPLE_RATE * FRAME_MS / 1000) * 2
-    chunk_bytes = int(SAMPLE_RATE * CHUNK_MS / 1000) * 2
-    ring = deque(maxlen=int(SAMPLE_RATE * 4) * 2)  # 4 s rolling window
-
-    inflight = False
-    buffer_time = time.time()
-
-    async def process_loop():
-        nonlocal inflight
-        while True:
-            await asyncio.sleep(CHUNK_MS / 1000.0)
-            if inflight or len(ring) < SAMPLE_RATE * 0.5 * 2:
+            msg = await ws.receive_bytes()
+            now = time.time()
+            ring.extend(msg)
+            if len(ring) < frame_bytes:
                 continue
-            inflight = True
-            pcm = int16_to_float32(bytes(ring))
-            t0 = time.time()
-            text, asr_ms = await run_transcribe(pcm)
-            inflight = False
-            if text.strip():
-                await ws.send_text(json.dumps({
-                    "type": "partial",
-                    "text": text.strip(),
-                    "asr_ms": int((time.time() - t0) * 1000),
-                }))
 
-    asyncio.create_task(process_loop())
+            frame = bytes(list(ring)[-frame_bytes:])
+            is_voice = VAD.is_speech(frame, SAMPLE_RATE)
+            if is_voice:
+                speaking = True
+                last_voice_t = now
 
-    try:
-        while True:
-            data = await ws.receive_bytes()
-            ring.extend(data)
+            # retranscribe every N ms
+            if (now - last_transcribe_t) * 1000 >= RETRANSCRIBE_EVERY_MS:
+                last_transcribe_t = now
+                pcm = int16_to_float32(bytes(ring))
+                t0 = time.time()
+                segs, _ = model.transcribe(pcm, language="en", without_timestamps=True)
+                text = "".join([s.text for s in segs]).strip()
+                asr_ms = max(0, int((time.time() - t0) * 1000))
+                e2e_ms = max(0, asr_ms)
+                if text and text != last_text:
+                    last_text = text
+                    await ws.send_text(json.dumps({
+                        "type": "partial",
+                        "text": text,
+                        "asr_ms": asr_ms,
+                        "e2e_ms": e2e_ms
+                    }))
 
-            # quick VAD to drop complete silence
-            if len(data) >= frame_bytes:
-                frame = data[-frame_bytes:]
-                if not VAD.is_speech(frame, SAMPLE_RATE):
-                    continue
+            # end of utterance (silence)
+            if speaking and (now - last_voice_t) >= SILENCE_TIMEOUT_S:
+                speaking = False
+                pcm = int16_to_float32(bytes(ring))
+                t0 = time.time()
+                segs, _ = model.transcribe(pcm, language="en", without_timestamps=True)
+                final_text = "".join([s.text for s in segs]).strip()
+                asr_ms = max(0, int((time.time() - t0) * 1000))
+                e2e_ms = max(0, asr_ms)
+                if final_text:
+                    transcript_lines.append(final_text)
+                    await ws.send_text(json.dumps({
+                        "type": "final",
+                        "text": final_text,
+                        "lines": transcript_lines[-6:],
+                        "asr_ms": asr_ms,
+                        "e2e_ms": e2e_ms
+                    }))
+                    last_text = ""
+                    ring.clear()
+
     except WebSocketDisconnect:
-        print("🔌 disconnected")
+        print("🔌 client disconnected")
     except Exception as e:
-        print(f"⚠️ error: {e}")
+        print(f"⚠️ {e}")
     finally:
         try:
             await ws.close()
-        except Exception:
+        except:
             pass
-        print("🧹 closed")
+        print("🧹 stream closed")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8787)
