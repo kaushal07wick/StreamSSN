@@ -81,10 +81,10 @@ export default function Page() {
           <h1 className="relative text-6xl font-black tracking-tighter text-[#ff4400] mb-1" style={{
             textShadow: '0 0 20px rgba(255,68,0,0.5), 0 0 40px rgba(255,68,0,0.2)'
           }}>
-            STREAMSSM
+            STREAM-SSM
           </h1>
           <p className="relative text-[#ff4400]/60 text-xs tracking-[0.3em] uppercase font-light">
-            Defense Speech Interface <span className="text-[#ff4400]/40">—</span> Rev 2.1
+            Speech Interface <span className="text-[#ff4400]/40">—</span> V 2.0
           </p>
         </div>
 
@@ -130,7 +130,7 @@ export default function Page() {
             {/* Latency Graph */}
             <div className="bg-gradient-to-br from-[#0f0f0f] to-[#050505] border border-[#333] rounded-lg p-4 relative overflow-hidden">
               <div className="absolute top-2 left-3 text-[#ff4400]/30 text-[9px] tracking-widest uppercase">
-                End-to-End Latency Timeline
+                 
               </div>
               <LatencyGraph data={latencyHistory} connected={connected} />
             </div>
@@ -159,7 +159,7 @@ export default function Page() {
 
         {/* Footer */}
         <p className="text-center text-[10px] text-gray-700 mt-8 tracking-widest uppercase">
-          Powered by Whisper + WebGPU
+          Invented by Kaushal🗜️
         </p>
       </div>
     </main>
@@ -317,7 +317,7 @@ function LatencyGraph({ data, connected }: { data: number[]; connected: boolean 
       const xTicks = 5;
       for (let i = 0; i <= xTicks; i++) {
         const x = padding.left + (graphWidth / xTicks) * i;
-        const seconds = Math.round(((xTicks - i) / xTicks) * 10); // 10 seconds total
+        const seconds = Math.round((i / xTicks) * 10); // 10 seconds total, 0s on right
         ctx.fillText(`${seconds}s`, x, height - padding.bottom + 8);
       }
 
