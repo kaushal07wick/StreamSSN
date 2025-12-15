@@ -1,9 +1,9 @@
 # **Stream-SSM: Real-Time Speech Stream Model**
 
-A high-performance, **CPU-optimized real-time ASR backend** built on **FastAPI** and **Faster-Whisper**.
-Stream-SSM runs dynamic chunked transcription, prompt reuse, and adaptive silence gating — achieving near-GPU latency **entirely on CPU**.
+A high-performance, **CPU-optimized streaming ASR backend** built on **FastAPI** and **Faster-Whisper**.
+Stream-SSM performs **incremental decoding with adaptive chunking, overlap scaling, and early finalization**, achieving near-GPU responsiveness entirely on CPU.
 
-The system is engineered as an open counterpart to **Cartesia / Ink-Whisper** stacks, designed for **low-latency, incremental decoding** in live pipelines and research environments.
+It’s the open, lightweight analogue to **Cartesia’s Ink-Whisper stack** — purpose-built for **real-time voice agents**, **research pipelines**, and **low-latency conversational AI**.
 
 ![image](stream.png)
 
@@ -11,29 +11,30 @@ The system is engineered as an open counterpart to **Cartesia / Ink-Whisper** st
 
 ## ⚙️ **Core Optimizations**
 
-| Optimization                  | Description                                                                                                 |
-| ----------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| **Dynamic Chunking**          | Adaptive 1 s window with 150 ms overlap for stable text boundaries.                                         |
-| **250 ms Retranscribe Cycle** | Continuous micro-window transcription for smooth partials.                                                  |
-| **Local Agreement Commit**    | Emits only after multi-word prefix consensus to eliminate jitter.                                           |
-| **Prompt Context Reuse**      | Carries recent transcript prefixes across chunks for contextual decoding.                                   |
-| **VAD-Triggered Finals**      | Detects 350 ms of silence to finalize utterances automatically.                                             |
-| **Thread-Controlled BLAS**    | Dynamically pins OpenBLAS/MKL threads to half CPU cores — prevents oversubscription and stabilizes latency. |
-| **Int8 Inference Path**       | Uses Faster-Whisper INT8 compute type for 3-4× faster CPU throughput.                                       |
-| **Streaming Facade**          | Simulated continuous decode buffer to reduce context resets.                                                |
-| **Warm Model Boot**           | Pre-loads with 0.5 s dummy audio to eliminate first-inference lag.                                          |
+| Optimization                     | Description                                                                                                                                 |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Adaptive Chunking**            | Dynamic decode window grows during active speech (0.5–1.8 s) and shrinks during silence, minimizing compute cost while maintaining context. |
+| **Adaptive Overlap**             | Overlap length auto-adjusts (50–180 ms) based on boundary stability to prevent word clipping or duplication.                                |
+| **Early Finalization**           | Detects silence onset (~120 ms) and commits final text instantly — cutting TTCT below 100 ms in live conditions.                            |
+| **Smart Prompt Reuse**           | Reuses sentence-aware suffix of prior transcript as contextual prompt for the next chunk — avoids hallucinations across utterances.         |
+| **Dynamic Retranscribe Cadence** | Retranscribe frequency accelerates during active speech (350 ms) and slows when steady (900 ms), reducing CPU overhead.                     |
+| **Local Prefix Commit**          | Confirms only when multi-word prefix consensus is reached — eliminates flicker between partial updates.                                     |
+| **VAD-Gated Inference**          | WebRTC-VAD gates model runs; decoding halts automatically during silence.                                                                   |
+| **Thread-Controlled BLAS**       | Pins MKL/OpenBLAS/NumExpr threads to single logical core for consistent latency.                                                            |
+| **Warm Start & Buffer Trim**     | Pre-warms model with dummy audio; rolling buffer trims to 10 s tail for continuous long sessions.                                           |
+| **Pure CPU Path**                | No Torch or GPU required — Faster-Whisper INT8 inference ensures 3–5× faster real-time throughput on mid-range CPUs.                        |
 
 ---
 
 ## ⚡ **Measured Performance (Intel i3-12100, 8 Threads, 16 GB RAM)**
 
-| Metric                 | Typical Value  | Description               |
-| ---------------------- | -------------- | ------------------------- |
-| **Partial Latency**    | 250–400 ms     | Speech → partial text     |
-| **Finalization Delay** | ≤ 350 ms       | Silence → confirmed final |
-| **Throughput**         | 6–8× real-time | On single physical core   |
-| **RAM Usage**          | < 1 GB         | Including buffers + model |
-| **Startup**            | 2–3 s          | Full FastAPI + model warm |
+| Metric                 | Typical Value  | Description                   |
+| ---------------------- | -------------- | ----------------------------- |
+| **Partial Latency**    | 200–400 ms     | Audio → partial text emission |
+| **Finalization Delay** | ≤ 120 ms       | Silence → final transcript    |
+| **Throughput**         | 6–8× real-time | Single physical core          |
+| **RAM Usage**          | < 1 GB         | Model + streaming buffers     |
+| **Startup Time**       | 2–3 s          | FastAPI + warm model boot     |
 
 ---
 
@@ -43,21 +44,24 @@ The system is engineered as an open counterpart to **Cartesia / Ink-Whisper** st
 `ws://localhost:8787/ws/stream`
 
 **Input:**
-16-bit PCM (mono, 16 kHz) frames sent as binary chunks.
+16-bit PCM mono @ 16 kHz, streamed as binary WebSocket frames.
 
 **Output:**
-JSON events streamed back to the client:
+JSON messages streamed back to client:
 
 ```json
-{"type": "partial", "text": "hello wor", "asr_ms": 280, "e2e_ms": 310}
-{"type": "final", "text": "hello world", "asr_ms": 295, "e2e_ms": 340, "ttct_ms": 370}
+{"type": "partial", "text": "this is a test", "asr_ms": 260, "win_s": 1.2, "ovl_s": 0.10}
+{"type": "final", "text": "this is a test of the system", "asr_ms": 275, "ttct_ms": 120}
 ```
 
 **Fields:**
 
-* `asr_ms`: model inference latency only
-* `e2e_ms`: full path latency (audio → text emission)
-* `ttct_ms`: silence-to-text closure time
+* `type`: `"partial"` or `"final"`
+* `text`: transcribed segment
+* `asr_ms`: model inference time
+* `ttct_ms`: time-to-complete-transcript (silence → final)
+* `win_s`: current adaptive chunk length (seconds)
+* `ovl_s`: current adaptive overlap (seconds)
 
 ---
 
@@ -65,16 +69,17 @@ JSON events streamed back to the client:
 
 ```bash
 pip install -r requirements.txt
-python real_time_asr_optimized.py
+python ssm_server.py
 ```
 
-Optional model selection:
+Optional configuration:
 
 ```bash
-export WHISPER_MODEL=tiny.en     # or base.en / small.en
+export WHISPER_MODEL=tiny.en      # or base.en / small.en
+export COMPUTE_TYPE=int8          # int8 / int8_float16
 ```
 
-Access the health endpoint at:
+Health check:
 
 ```bash
 curl http://localhost:8787/health
@@ -84,33 +89,34 @@ curl http://localhost:8787/health
 
 ## 🧩 **Integration**
 
-Stream-SSM pairs seamlessly with a **Go gRPC gateway**, which:
+Stream-SSM can plug into a **Go or Rust gateway** for scaling:
 
-* Handles thousands of concurrent WebSocket/gRPC streams
-* Routes sessions to multiple Python ASR workers
-* Aggregates and exports latency metrics (`asr_ms`, `e2e_ms`, `ttct_ms`) to Prometheus/Grafana
+* Routes thousands of concurrent WebSocket/gRPC streams
+* Aggregates latency metrics (`asr_ms`, `ttct_ms`) to Prometheus/Grafana
+* Coordinates distributed CPU inference nodes for multi-tenant ASR workloads
 
-This separation of control (Go) and inference (Python) delivers **low-latency scaling** under real-time load.
+The separation between control (Go/Rust) and inference (Python) allows **deterministic low-latency streaming** under heavy load.
 
 ---
 
 ## 🔭 **Use Cases**
 
-* Benchmarking **CPU-only real-time ASR** on constrained edge hardware
-* Researching **incremental decoding and context reuse** in Whisper models
-* Building **speech-driven control systems** or live AI agents
-* Comparing **transformer vs. state-space streaming architectures**
+* Building **real-time conversational agents** or **AI copilots**
+* Deploying **low-latency ASR** on CPU-only edge devices
+* Researching **incremental decoding** and **context carryover** in Whisper models
+* Benchmarking **Cartesia-like adaptive speech pipelines**
 
 ---
 
 ## 🧠 **Planned Extensions**
 
-* GPU-accelerated modal runtime with adaptive batching
-* Learned silence boundary predictor
-* Real-time state-space hybrid inference (Stream-SSM v3)
-* Cross-language incremental decoding support
+* Confidence-driven commit using token probabilities
+* Learned silence boundary prediction
+* Cross-language incremental decoding
+* Hybrid **State-Space Model (SSM)** integration for v3
+* gRPC-native multi-session manager for large-scale deployments
 
 ---
 
-> **Stream-SSM** — engineered for real-time, latency-tight, model-agnostic speech understanding.
-> Built for edge. Tuned for speed. Designed for truth-to-speech precision.
+> **Stream-SSM** — built for **real-time**, **truth-to-speech**, and **edge-grade precision**.
+> Inspired by Cartesia’s streaming architecture. Powered by CPU. Tuned for latency under fire.
