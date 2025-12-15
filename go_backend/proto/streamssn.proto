@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package streamssn;
+
+// ✅ full import path — tells protoc it's inside the module, not filesystem
+option go_package = "/proto;pb";
+
+service StreamASR {
+  rpc StreamAudio (stream AudioChunk) returns (stream Transcript);
+}
+
+message AudioChunk {
+  bytes audio_data = 1;
+  string session_id = 2;
+}
+
+message Transcript {
+  string text = 1;
+  string session_id = 2;
+  float timestamp = 3;
+}
