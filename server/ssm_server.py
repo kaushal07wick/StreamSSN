@@ -12,11 +12,21 @@ API unchanged: /ws/stream emits {"type":"partial"|"final", ...}
 """
 
 # ---- Thread pinning BEFORE imports that load BLAS ----
+# ---- Controlled parallelism BEFORE imports that load BLAS ----
 import os
-os.environ.setdefault("OMP_NUM_THREADS", "1")
-os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
-os.environ.setdefault("MKL_NUM_THREADS", "1")
-os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
+import multiprocessing
+
+# detect core count
+num_cores = multiprocessing.cpu_count()
+# limit to physical cores if hyperthreading is on (≈ half)
+num_threads = max(1, num_cores // 2)
+
+os.environ["OMP_NUM_THREADS"] = str(num_threads)
+os.environ["OPENBLAS_NUM_THREADS"] = str(num_threads)
+os.environ["MKL_NUM_THREADS"] = str(num_threads)
+os.environ["NUMEXPR_NUM_THREADS"] = str(num_threads)
+
+print(f"⚙️ Using up to {num_threads} CPU threads for math kernels")
 
 import asyncio, json, time, webrtcvad, uvicorn, numpy as np
 from collections import deque
