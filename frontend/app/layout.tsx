@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "StreamSSN",
+  title: "StreamSSM",
   description: "Real-time Audio Inference",
 };
 

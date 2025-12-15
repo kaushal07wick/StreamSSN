@@ -25,7 +25,7 @@ export default function Page() {
       const ctx = new AudioContext();
       ctxRef.current = ctx;
       await ctx.audioWorklet.addModule("/worklet-processor.js");
-      const ws = new WebSocket("wss://streamssn.onrender.com/ws/stream");
+      const ws = new WebSocket(process.env.NEXT_PUBLIC_WS_URL || "wss://streamssn.onrender.com/ws/stream");
       ws.binaryType = "arraybuffer";
 
       ws.onopen = () => setConnected(true);
